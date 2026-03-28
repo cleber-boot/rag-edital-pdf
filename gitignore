@@ -1,0 +1,12 @@
+# Variáveis de ambiente (NUNCA commitar)
+.env
+
+# Bancos ChromaDB locais
+chroma_bancos/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
