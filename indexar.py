@@ -37,7 +37,7 @@ CHUNK_SIZE    = 800
 CHUNK_OVERLAP = 100
 
 EMBEDDING_MODEL = "gemini-embedding-001"
-VISION_MODEL    = "gemini-2.5-flash-lite"
+VISION_MODEL    = "gemini-1.5-flash"
 
 BATCH_SIZE  = 20    # chunks por lote de embedding
 BATCH_PAUSE = 10    # segundos entre lotes
