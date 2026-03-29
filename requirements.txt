@@ -1,20 +1,23 @@
 # Interface
 streamlit>=1.35.0
-
+ 
 # Google Gemini
 google-genai>=1.10.0
-
+ 
 # Banco vetorial
 chromadb>=0.5.23
-
+ 
 # Reranking
 flashrank>=0.2.9
-
+ 
 # Extração de texto de PDFs
 pymupdf>=1.24.11
-
+ 
 # Chunking de texto
 langchain-text-splitters>=0.3.3
-
+ 
+# Geração de PDF
+fpdf2>=2.7.9
+ 
 # Variáveis de ambiente
 python-dotenv>=1.0.0

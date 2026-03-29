@@ -35,7 +35,7 @@ cp .env.example .env
 
 ### 4. Rode a aplicação
 ```bash
-streamlit run app.py
+python -m streamlit run app.py
 ```
 
 O Codespaces abrirá automaticamente a porta do Streamlit no browser.
