@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # ── configuração ──────────────────────────────────────────────
 CHROMA_BASE_DIR = "./chroma_bancos"
-MODELO_GROQ     = "moonshotai/kimi-k2-instruct"  # 60 RPM / 300K TPD / 262K ctx
+MODELO_GROQ     = "llama-3.1-8b-instant"  # 60 RPM / 300K TPD / 262K ctx
 
 _ERROS_429 = ("429", "rate_limit_exceeded", "rate limit", "too many requests")
 _ERROS_413 = ("413", "request too large", "request_too_large")
@@ -463,7 +463,7 @@ COMPARACAO FINAL CONSOLIDADA:"""
 
                 # ── CORREÇÃO: lote maior = menos chamadas = menos 429 ──
                 LOTE             = 20   # era 5 — reduz chamadas em 4x
-                PAUSA_ENTRE_LOTES = 3   # segundos entre lotes para respeitar RPM
+                PAUSA_ENTRE_LOTES = 5   # segundos entre lotes para respeitar RPM
                 resumos_parciais = []
                 total_lotes      = (len(chunks) + LOTE - 1) // LOTE
                 barra            = st.progress(0, text="Analisando partes...")
