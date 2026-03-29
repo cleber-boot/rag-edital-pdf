@@ -142,12 +142,15 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
                     f"Limite de {max_tentativas} tentativas no Groq. Último erro: {e}"
                 )
 
+            # Tenta ler retry-after, mas limita a 60s (Groq às vezes retorna valores absurdos)
+            ESPERA_MAX_RETRY_AFTER = 60.0
             retry_after = None
             if hasattr(e, "response") and e.response is not None:
                 retry_after = e.response.headers.get("retry-after")
 
             if retry_after:
-                espera = float(retry_after) + random.uniform(0.5, 2.0)
+                espera = min(float(retry_after), ESPERA_MAX_RETRY_AFTER)
+                espera += random.uniform(0.5, 2.0)
             else:
                 espera = min(espera_base * (2 ** (tentativa - 1)), espera_max)
                 espera += random.uniform(-2.0, 2.0)
