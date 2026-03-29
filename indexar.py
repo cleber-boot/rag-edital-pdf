@@ -1,37 +1,35 @@
 """
 indexar.py — processa PDFs e salva no ChromaDB
-Versão Codespaces: aceita bytes diretamente
-
-Correções para indexar vários arquivos:
-  - BATCH_SIZE = 20 chunks por chamada (bem conservador)
-  - BATCH_PAUSE = 4s entre lotes (100 req/min → 1 req/600ms seguro)
-  - Pausa de segurança ao final de cada arquivo (PAUSA_ENTRE_ARQUIVOS)
-  - Backoff exponencial com jitter em caso de 429
-  - Progresso via callback opcional para exibir no Streamlit
+Embeddings multimodais via gemini-embedding-2-preview
+Suporte a: texto nativo, PDFs escaneados, figuras e gráficos
 """
 
+import io
 import time
 import tempfile
-import logging
+
 import fitz  # PyMuPDF
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from PIL import Image
 from google import genai
 from google.genai import types
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from gemini_retry import embed_com_retry
+# ── configuração ──────────────────────────────────────────────
+CHUNK_SIZE      = 800
+CHUNK_OVERLAP   = 100
+EMBEDDING_MODEL = "gemini-embedding-2-preview"
 
-logger = logging.getLogger(__name__)
+# Máximo de imagens por requisição de embedding (limite da API)
+MAX_IMGS_POR_LOTE = 6
 
-CHUNK_SIZE    = 800
-CHUNK_OVERLAP = 100
-EMBEDDING_MODEL = "gemini-embedding-001"
+# Limite de tokens por minuto (free tier) — pausa entre lotes
+BATCH_SIZE  = 20   # chunks de texto por lote
+BATCH_PAUSE = 10   # segundos entre lotes
+MAX_RETRY   = 5
+RETRY_WAIT  = 60
 
-# ── Parâmetros de throttle ───────────────────────────────────────────────────
-# gemini-embedding-001: 100 req/min no plano gratuito
-# Com BATCH_SIZE=20 e BATCH_PAUSE=4s → ~15 req/min → folgado mesmo com vários arquivos
-BATCH_SIZE           = 20   # chunks por chamada embed_content
-BATCH_PAUSE          = 4    # segundos entre lotes do mesmo arquivo
-PAUSA_ENTRE_ARQUIVOS = 10   # segundos de descanso após terminar cada arquivo
+# Mínimo de chars para considerar que a página tem texto nativo
+MIN_CHARS_TEXTO = 50
 
 splitter = RecursiveCharacterTextSplitter(
     chunk_size=CHUNK_SIZE,
@@ -40,72 +38,158 @@ splitter = RecursiveCharacterTextSplitter(
 )
 
 
-def extrair_texto_bytes(conteudo: bytes) -> str:
+# ── helpers de imagem ─────────────────────────────────────────
+def _pagina_para_pil(pagina: fitz.Page, dpi: int = 150) -> Image.Image:
+    """Renderiza uma página PDF como imagem PIL."""
+    pix = pagina.get_pixmap(dpi=dpi)
+    return Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+
+
+def _extrair_imagens_pagina(pagina: fitz.Page) -> list[Image.Image]:
+    """Extrai imagens embutidas de uma página PDF como PIL Images."""
+    imagens = []
+    for img_info in pagina.get_images(full=True):
+        xref = img_info[0]
+        try:
+            base_img  = pagina.parent.extract_image(xref)
+            img       = Image.open(io.BytesIO(base_img["image"])).convert("RGB")
+            # Ignora imagens muito pequenas (ícones, decorações)
+            if img.width > 100 and img.height > 100:
+                imagens.append(img)
+        except Exception:
+            continue
+    return imagens
+
+
+# ── extração de conteúdo por página ──────────────────────────
+def extrair_conteudo_pdf(conteudo: bytes) -> dict:
+    """
+    Extrai conteúdo de um PDF separando:
+    - chunks de texto (para embedding de texto)
+    - imagens de páginas (para embedding de imagem)
+
+    Retorna:
+        {
+            "chunks_texto": list[str],
+            "imagens_pagina": list[{"pagina": int, "imagem": PIL.Image}],
+            "imagens_figura": list[{"pagina": int, "figura": int, "imagem": PIL.Image}]
+        }
+    """
+    chunks_texto    = []
+    imagens_pagina  = []
+    imagens_figura  = []
+    texto_acumulado = []
+
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
         tmp.write(conteudo)
         tmp.flush()
         doc = fitz.open(tmp.name)
-        texto = "".join(pagina.get_text() for pagina in doc)
-    return texto
+
+        for num_pag, pagina in enumerate(doc, 1):
+            texto_nativo = pagina.get_text().strip()
+
+            if len(texto_nativo) >= MIN_CHARS_TEXTO:
+                # Página com texto nativo — acumula para chunking
+                texto_acumulado.append(f"[Página {num_pag}]\n{texto_nativo}")
+
+                # Extrai figuras embutidas para embedding visual
+                figuras = _extrair_imagens_pagina(pagina)
+                for i, img in enumerate(figuras, 1):
+                    imagens_figura.append({
+                        "pagina": num_pag,
+                        "figura": i,
+                        "imagem": img
+                    })
+            else:
+                # Página escaneada — indexa como imagem
+                img_pagina = _pagina_para_pil(pagina)
+                imagens_pagina.append({
+                    "pagina": num_pag,
+                    "imagem": img_pagina
+                })
+
+    # Gera chunks do texto acumulado
+    if texto_acumulado:
+        texto_completo = "\n\n".join(texto_acumulado)
+        chunks_texto   = splitter.split_text(texto_completo)
+
+    return {
+        "chunks_texto":   chunks_texto,
+        "imagens_pagina": imagens_pagina,
+        "imagens_figura": imagens_figura,
+    }
 
 
-def gerar_embeddings(
+# ── embeddings com retry ──────────────────────────────────────
+def _embed_com_retry(cliente: genai.Client, contents, task_type: str) -> list[float]:
+    """Gera embedding de um conteúdo (texto ou imagem) com retry."""
+    for tentativa in range(1, MAX_RETRY + 1):
+        try:
+            resultado = cliente.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=contents,
+                config=types.EmbedContentConfig(task_type=task_type)
+            )
+            return resultado.embeddings[0].values
+        except Exception as e:
+            erro = str(e)
+            if "429" in erro or "RESOURCE_EXHAUSTED" in erro:
+                print(f"[429] Aguardando {RETRY_WAIT}s... (tentativa {tentativa}/{MAX_RETRY})")
+                time.sleep(RETRY_WAIT)
+            else:
+                raise
+    raise RuntimeError(f"Falha ao gerar embedding após {MAX_RETRY} tentativas.")
+
+
+def _embed_texto_lote(
     cliente: genai.Client,
     chunks: list[str],
-    callback=None,          # callback(lote_num, total_lotes) para atualizar UI
+    task_type: str = "RETRIEVAL_DOCUMENT"
 ) -> list[list[float]]:
-    """
-    Gera embeddings em lotes com:
-      - Retry automático (backoff exponencial via embed_com_retry)
-      - Pausa fixa entre lotes para respeitar 100 req/min
-      - Callback opcional para progresso no Streamlit
-    """
-    todos: list[list[float]] = []
-    total_lotes = (len(chunks) + BATCH_SIZE - 1) // BATCH_SIZE
+    """Gera embeddings de uma lista de chunks de texto em lotes."""
+    todos = []
+    total = (len(chunks) + BATCH_SIZE - 1) // BATCH_SIZE
 
     for i in range(0, len(chunks), BATCH_SIZE):
-        lote     = chunks[i : i + BATCH_SIZE]
+        lote     = chunks[i:i + BATCH_SIZE]
         lote_num = i // BATCH_SIZE + 1
+        print(f"[embedding texto] Lote {lote_num}/{total} — {len(lote)} chunks...")
 
-        logger.info("[embedding] Lote %d/%d — %d chunks...", lote_num, total_lotes, len(lote))
+        for chunk in lote:
+            emb = _embed_com_retry(cliente, chunk, task_type)
+            todos.append(emb)
 
-        resultado = embed_com_retry(
-            cliente=cliente,
-            model=EMBEDDING_MODEL,
-            contents=lote,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
-        )
-        todos.extend(e.values for e in resultado.embeddings)
-
-        if callback:
-            callback(lote_num, total_lotes)
-
-        # Pausa entre lotes — mesmo no último (protege o próximo arquivo)
-        time.sleep(BATCH_PAUSE)
+        if i + BATCH_SIZE < len(chunks):
+            time.sleep(BATCH_PAUSE)
 
     return todos
 
 
+def _embed_imagem(cliente: genai.Client, imagem: Image.Image) -> list[float]:
+    """Gera embedding de uma imagem PIL."""
+    return _embed_com_retry(cliente, imagem, "RETRIEVAL_DOCUMENT")
+
+
+# ── indexação principal ───────────────────────────────────────
 def indexar_pdf_bytes(
     nome: str,
     conteudo: bytes,
     colecao,
     cliente: genai.Client,
-    callback=None,           # callback(lote_num, total_lotes) opcional
-    pausar_ao_final: bool = True,  # pausa após terminar para proteger próximo arquivo
+    callback=None,
+    pausar_ao_final: bool = False,
 ) -> dict:
     """
-    Indexa um PDF no ChromaDB.
+    Indexa um PDF com embeddings multimodais (gemini-embedding-2-preview).
 
-    Parâmetros
-    ----------
-    nome           : nome do arquivo (usado como ID no banco)
-    conteudo       : bytes do PDF
-    colecao        : coleção ChromaDB de destino
-    cliente        : cliente Gemini para embeddings
-    callback       : função chamada a cada lote — útil para barra de progresso
-    pausar_ao_final: se True, aguarda PAUSA_ENTRE_ARQUIVOS segundos ao terminar
-                     (protege a cota quando há múltiplos arquivos em sequência)
+    - Texto nativo → embedding de texto
+    - Páginas escaneadas → embedding de imagem da página inteira
+    - Figuras/gráficos embutidos → embedding de imagem da figura
+
+    Retorna dict com:
+        status : "ok" | "ja_indexado" | "erro"
+        chunks : int  (se ok)
+        erro   : str  (se erro)
     """
     # Verifica se já foi indexado
     if colecao.count() > 0:
@@ -114,28 +198,93 @@ def indexar_pdf_bytes(
             return {"status": "ja_indexado", "chunks": 0}
 
     try:
-        texto = extrair_texto_bytes(conteudo)
-        if not texto.strip():
-            return {"status": "erro", "erro": "PDF vazio ou só imagens"}
+        print(f"[indexar] Extraindo conteúdo de '{nome}'...")
+        conteudo_pdf = extrair_conteudo_pdf(conteudo)
 
-        chunks = splitter.split_text(texto)
-        logger.info("[indexar] '%s' → %d chunks gerados.", nome, len(chunks))
+        chunks_texto   = conteudo_pdf["chunks_texto"]
+        imgs_pagina    = conteudo_pdf["imagens_pagina"]
+        imgs_figura    = conteudo_pdf["imagens_figura"]
 
-        embeddings = gerar_embeddings(cliente, chunks, callback=callback)
+        total_items = len(chunks_texto) + len(imgs_pagina) + len(imgs_figura)
+        if total_items == 0:
+            return {"status": "erro", "erro": "PDF vazio — nenhum conteúdo extraído"}
 
-        colecao.add(
-            ids=[f"{nome}_chunk_{j}" for j in range(len(chunks))],
-            embeddings=embeddings,
-            documents=chunks,
-            metadatas=[{"arquivo": nome, "chunk": j} for j in range(len(chunks))],
-        )
+        print(f"[indexar] '{nome}' → {len(chunks_texto)} chunks texto, "
+              f"{len(imgs_pagina)} páginas escaneadas, "
+              f"{len(imgs_figura)} figuras")
+
+        ids        = []
+        embeddings = []
+        documents  = []
+        metadatas  = []
+        contador   = 0
+        total_lotes = (len(chunks_texto) + BATCH_SIZE - 1) // BATCH_SIZE or 1
+
+        # ── 1. Embeddings de texto ────────────────────────────
+        for i, chunk in enumerate(chunks_texto):
+            emb = _embed_com_retry(cliente, chunk, "RETRIEVAL_DOCUMENT")
+            ids.append(f"{nome}_texto_{i}")
+            embeddings.append(emb)
+            documents.append(chunk)
+            metadatas.append({"arquivo": nome, "tipo": "texto", "chunk": i})
+            contador += 1
+
+            if callback and i % BATCH_SIZE == 0:
+                lote_num = i // BATCH_SIZE + 1
+                callback(lote_num, total_lotes)
+
+            if (i + 1) % BATCH_SIZE == 0 and i + 1 < len(chunks_texto):
+                time.sleep(BATCH_PAUSE)
+
+        # ── 2. Embeddings de páginas escaneadas ───────────────
+        for item in imgs_pagina:
+            num_pag = item["pagina"]
+            img     = item["imagem"]
+            print(f"[indexar] Embedding página escaneada {num_pag}...")
+
+            emb = _embed_imagem(cliente, img)
+            ids.append(f"{nome}_pagina_{num_pag}")
+            embeddings.append(emb)
+            documents.append(f"[Página escaneada {num_pag} de {nome}]")
+            metadatas.append({
+                "arquivo": nome,
+                "tipo":    "pagina_escaneada",
+                "pagina":  num_pag
+            })
+            time.sleep(2)  # pausa entre imagens
+
+        # ── 3. Embeddings de figuras embutidas ────────────────
+        for item in imgs_figura:
+            num_pag = item["pagina"]
+            num_fig = item["figura"]
+            img     = item["imagem"]
+            print(f"[indexar] Embedding figura {num_fig} da página {num_pag}...")
+
+            emb = _embed_imagem(cliente, img)
+            ids.append(f"{nome}_figura_{num_pag}_{num_fig}")
+            embeddings.append(emb)
+            documents.append(f"[Figura {num_fig} da página {num_pag} de {nome}]")
+            metadatas.append({
+                "arquivo": nome,
+                "tipo":    "figura",
+                "pagina":  num_pag,
+                "figura":  num_fig
+            })
+            time.sleep(2)  # pausa entre imagens
 
         if pausar_ao_final:
-            logger.info("[indexar] Pausa de %ds após '%s'...", PAUSA_ENTRE_ARQUIVOS, nome)
-            time.sleep(PAUSA_ENTRE_ARQUIVOS)
+            print("[indexar] Pausa de 10s antes do próximo arquivo...")
+            time.sleep(10)
 
-        return {"status": "ok", "chunks": len(chunks)}
+        # ── Salva no ChromaDB ─────────────────────────────────
+        colecao.add(
+            ids=ids,
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas
+        )
+
+        return {"status": "ok", "chunks": len(ids)}
 
     except Exception as e:
-        logger.error("[indexar] Erro ao indexar '%s': %s", nome, e)
         return {"status": "erro", "erro": str(e)}
