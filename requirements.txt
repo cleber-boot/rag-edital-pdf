@@ -1,29 +1,32 @@
 # Interface
 streamlit>=1.35.0
- 
-# Google Gemini (embeddings multimodais)
+
+# Google Gemini (embeddings + Vision)
 google-genai>=1.10.0
- 
+
 # LLM
 groq>=0.9.0
- 
+
 # Banco vetorial
 chromadb>=0.5.23
- 
+
 # Reranking
 flashrank>=0.2.9
- 
+
 # Extração de texto e renderização de PDFs
 pymupdf>=1.24.11
- 
+
 # Processamento de imagens
 Pillow>=10.0.0
- 
+
+# OCR (Tesseract — requer instalação do sistema: apt-get install tesseract-ocr tesseract-ocr-por)
+pytesseract>=0.3.10
+
 # Chunking de texto
 langchain-text-splitters>=0.3.3
- 
+
 # Geração de PDF
 fpdf2>=2.7.9
- 
+
 # Variáveis de ambiente
 python-dotenv>=1.0.0

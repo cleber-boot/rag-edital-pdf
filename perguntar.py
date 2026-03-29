@@ -1,6 +1,6 @@
 """
 perguntar.py — busca, rerank e montagem de contexto
-Usa gemini-embedding-2-preview para embedding da pergunta
+Usa gemini-embedding-001 para embedding da pergunta
 LLM: Groq llama-3.1-8b-instant (via app.py)
 """
 
@@ -8,7 +8,7 @@ from google import genai
 from google.genai import types
 from flashrank import Ranker, RerankRequest
 
-EMBEDDING_MODEL = "gemini-embedding-2-preview"
+EMBEDDING_MODEL = "gemini-embedding-001"
 TOP_K           = 10
 TOP_N_RERANK    = 5
 
