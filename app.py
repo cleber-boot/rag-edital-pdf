@@ -2,12 +2,12 @@
 app.py — Interface Streamlit para RAG com PDFs
 Versão Codespaces: ChromaDB local, download de PDF
 
-Embeddings: Gemini gemini-embedding-001
-LLM: Gemini gemini-2.5-flash-lite
+Embeddings : Gemini gemini-embedding-001        (100 req/min — plano gratuito)
+LLM        : Groq  moonshotai/kimi-k2-instruct  (60 RPM, 300K TPD, 262K contexto)
 
-Melhorias de rate limiting:
-  - gerar_resposta usa backoff exponencial com jitter
-  - Exibe aviso no Streamlit enquanto aguarda retry
+Variáveis de ambiente necessárias no .env:
+    GEMINI_API_KEY=...
+    GROQ_API_KEY=...
 """
 
 import os
@@ -18,6 +18,7 @@ import logging
 import streamlit as st
 import chromadb
 from google import genai
+from groq import Groq
 from flashrank import Ranker
 from dotenv import load_dotenv
 
@@ -31,23 +32,32 @@ logger = logging.getLogger(__name__)
 
 # ── configuração ──────────────────────────────────────────────
 CHROMA_BASE_DIR = "./chroma_bancos"
-MODELO_ID = "gemini-2.5-flash-lite"
+MODELO_GROQ     = "moonshotai/kimi-k2-instruct"  # 60 RPM / 300K TPD / 262K ctx
 
-_ERROS_429 = ("429", "RESOURCE_EXHAUSTED", "quota", "rate limit")
+_ERROS_429 = ("429", "rate_limit_exceeded", "rate limit", "too many requests")
 
 
 # ── inicialização ─────────────────────────────────────────────
 @st.cache_resource
 def inicializar():
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        st.error("❌ GEMINI_API_KEY não encontrada. Crie um arquivo .env com GEMINI_API_KEY=sua_chave")
-        st.stop()
-    cliente = genai.Client(api_key=api_key)
-    ranker = Ranker()
-    return cliente, ranker
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    groq_key   = os.environ.get("GROQ_API_KEY")
 
-cliente_genai, ranker = inicializar()
+    erros = []
+    if not gemini_key:
+        erros.append("GEMINI_API_KEY")
+    if not groq_key:
+        erros.append("GROQ_API_KEY")
+    if erros:
+        st.error(f"❌ Chaves não encontradas no .env: {', '.join(erros)}")
+        st.stop()
+
+    cliente_gemini = genai.Client(api_key=gemini_key)
+    cliente_groq   = Groq(api_key=groq_key)
+    ranker         = Ranker()
+    return cliente_gemini, cliente_groq, ranker
+
+cliente_gemini, cliente_groq, ranker = inicializar()
 
 
 # ── helpers de banco ──────────────────────────────────────────
@@ -89,47 +99,58 @@ def listar_pdfs(nome_banco: str) -> list[str]:
         return []
 
 
-# ── geração de resposta com backoff exponencial + jitter ─────
-def gerar_resposta(prompt: str, max_tentativas: int = 7) -> str:
+# ── geração de resposta via Groq/Kimi K2 com backoff exponencial ─────
+def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
     """
-    Chama o Gemini com retry automático usando backoff exponencial e jitter.
-    - 1ª falha: aguarda ~10s
-    - 2ª falha: aguarda ~20s
-    - 3ª falha: aguarda ~40s
-    - ... até 120s máximo
-    Jitter de ±3s evita que múltiplas chamadas simultâneas colidam.
+    Chama o Kimi K2 via Groq com retry automático (backoff exponencial + jitter).
+    Lê o header 'retry-after' quando disponível para respeitar exatamente
+    o tempo sugerido pela API.
     """
-    espera_base = 10.0
-    espera_max = 120.0
+    espera_base = 5.0
+    espera_max  = 90.0
 
     for tentativa in range(1, max_tentativas + 1):
         try:
-            resposta = cliente_genai.models.generate_content(
-                model=MODELO_ID,
-                contents=prompt
+            resposta = cliente_groq.chat.completions.create(
+                model=MODELO_GROQ,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user",   "content": prompt},
+                ],
+                temperature=0.2,
+                max_tokens=4096,
             )
-            return resposta.text
+            return resposta.choices[0].message.content
 
         except Exception as e:
-            eh_429 = any(t in str(e) for t in _ERROS_429)
+            erro_str = str(e).lower()
+            eh_429   = any(t in erro_str for t in _ERROS_429)
+
             if not eh_429:
-                raise  # outros erros sobem imediatamente
+                raise
 
             if tentativa == max_tentativas:
                 raise RuntimeError(
-                    f"Limite de {max_tentativas} tentativas atingido. Último erro: {e}"
+                    f"Limite de {max_tentativas} tentativas no Groq. Último erro: {e}"
                 )
 
-            espera = min(espera_base * (2 ** (tentativa - 1)), espera_max)
-            espera += random.uniform(-3.0, 3.0)
-            espera = max(espera, 2.0)
+            retry_after = None
+            if hasattr(e, "response") and e.response is not None:
+                retry_after = e.response.headers.get("retry-after")
+
+            if retry_after:
+                espera = float(retry_after) + random.uniform(0.5, 2.0)
+            else:
+                espera = min(espera_base * (2 ** (tentativa - 1)), espera_max)
+                espera += random.uniform(-2.0, 2.0)
+                espera = max(espera, 2.0)
 
             logger.warning(
-                "[gerar_resposta] 429 (tentativa %d/%d). Aguardando %.1fs...",
+                "[gerar_resposta] 429 Groq/Kimi (tentativa %d/%d). Aguardando %.1fs...",
                 tentativa, max_tentativas, espera,
             )
             st.warning(
-                f"⏳ Limite da API atingido. Aguardando {espera:.0f}s... "
+                f"⏳ Limite da API Groq atingido. Aguardando {espera:.0f}s... "
                 f"(tentativa {tentativa}/{max_tentativas})"
             )
             time.sleep(espera)
@@ -138,7 +159,7 @@ def gerar_resposta(prompt: str, max_tentativas: int = 7) -> str:
 # ── interface ─────────────────────────────────────────────────
 st.set_page_config(page_title="📚 RAG com PDFs", layout="wide")
 st.title("📚 RAG com PDFs")
-st.caption("powered by Gemini 2.5 Flash-Lite + Flashrank + ChromaDB")
+st.caption("powered by Kimi K2 (Groq) + Gemini Embeddings + Flashrank + ChromaDB")
 
 aba = st.tabs(["📥 Indexar", "🔍 Perguntar", "📄 Resumir", "📊 Status"])
 
@@ -155,7 +176,6 @@ with aba[0]:
         placeholder="Ex: direito_civil, medicina_2024, tcc_joao",
         help="O nome será convertido para letras minúsculas e sem espaços."
     )
-
     arquivos = st.file_uploader("Selecione PDFs", type="pdf", accept_multiple_files=True)
 
     if st.button("📥 Indexar PDFs", type="primary"):
@@ -165,13 +185,13 @@ with aba[0]:
             st.error("⚠️ Selecione ao menos um PDF.")
         else:
             nome_banco = _slug(nome_banco_input)
-            colecao = get_colecao(nome_banco)
+            colecao    = get_colecao(nome_banco)
             st.write(f"📂 Banco: **{nome_banco}**")
 
             for arquivo in arquivos:
                 conteudo = arquivo.read()
                 with st.spinner(f"Indexando {arquivo.name}..."):
-                    resultado = indexar_pdf_bytes(arquivo.name, conteudo, colecao, cliente_genai)
+                    resultado = indexar_pdf_bytes(arquivo.name, conteudo, colecao, cliente_gemini)
 
                 if resultado["status"] == "ok":
                     st.success(f"✅ {arquivo.name} — {resultado['chunks']} chunks indexados")
@@ -218,25 +238,25 @@ with aba[1]:
                 else:
                     with st.spinner("Buscando trechos relevantes..."):
                         try:
-                            trechos_raw = buscar_trechos(pergunta, colecao, cliente_genai, top_k=top_k)
-                            trechos = rerankar_trechos(pergunta, trechos_raw, ranker, top_n=top_n)
+                            trechos_raw = buscar_trechos(pergunta, colecao, cliente_gemini, top_k=top_k)
+                            trechos     = rerankar_trechos(pergunta, trechos_raw, ranker, top_n=top_n)
                         except Exception as e:
                             st.error(f"❌ Erro na busca: {e}")
                             st.stop()
 
-                    with st.spinner("Gerando resposta..."):
+                    with st.spinner("Gerando resposta com Kimi K2..."):
                         try:
                             contexto = montar_contexto(trechos)
-                            prompt = f"{SYSTEM_PROMPT}\n\nTRECHOS RECUPERADOS:\n{contexto}\n\nPERGUNTA: {pergunta}"
+                            prompt   = f"TRECHOS RECUPERADOS:\n{contexto}\n\nPERGUNTA: {pergunta}"
                             resposta = gerar_resposta(prompt)
                         except Exception as e:
                             st.error(f"❌ Erro ao gerar resposta: {e}")
                             st.stop()
 
-                    st.session_state["ultima_pergunta"] = pergunta
-                    st.session_state["ultima_resposta"] = resposta
-                    st.session_state["ultimos_trechos"] = trechos
-                    st.session_state["ultimo_banco_p"] = banco_sel
+                    st.session_state["ultima_pergunta"]  = pergunta
+                    st.session_state["ultima_resposta"]  = resposta
+                    st.session_state["ultimos_trechos"]  = trechos
+                    st.session_state["ultimo_banco_p"]   = banco_sel
 
         if "ultima_resposta" in st.session_state:
             st.subheader("Resposta")
@@ -244,21 +264,24 @@ with aba[1]:
 
             with st.expander("📎 Trechos utilizados"):
                 for i, t in enumerate(st.session_state["ultimos_trechos"], 1):
-                    st.markdown(f"**#{i} · {t['arquivo']}** | rerank: `{t['relevancia_rerank']}` | embed: `{t['relevancia']}`")
+                    st.markdown(
+                        f"**#{i} · {t['arquivo']}** | "
+                        f"rerank: `{t['relevancia_rerank']}` | embed: `{t['relevancia']}`"
+                    )
                     st.markdown(f"> {t['texto']}")
                     st.divider()
 
             pdf_bytes = gerar_pdf_resposta(
-                pergunta=st.session_state["ultima_pergunta"],
-                resposta=st.session_state["ultima_resposta"],
-                banco=st.session_state["ultimo_banco_p"],
-                trechos=st.session_state["ultimos_trechos"]
+                pergunta = st.session_state["ultima_pergunta"],
+                resposta = st.session_state["ultima_resposta"],
+                banco    = st.session_state["ultimo_banco_p"],
+                trechos  = st.session_state["ultimos_trechos"]
             )
             st.download_button(
-                label="📥 Baixar resposta em PDF",
-                data=pdf_bytes,
-                file_name="resposta.pdf",
-                mime="application/pdf"
+                label     = "📥 Baixar resposta em PDF",
+                data      = pdf_bytes,
+                file_name = "resposta.pdf",
+                mime      = "application/pdf"
             )
 
 
@@ -396,28 +419,28 @@ COMPARACAO FINAL CONSOLIDADA:"""
                 st.caption(ESTILOS_RESUMO[estilo_sel]["descricao"])
 
         if pdf_sel and st.button("📄 Gerar Resumo", type="primary"):
-            estilo = ESTILOS_RESUMO[estilo_sel]
+            estilo  = ESTILOS_RESUMO[estilo_sel]
             colecao = get_colecao(banco_sel_r)
 
             with st.spinner("Buscando todos os chunks do PDF..."):
                 resultado = colecao.get(where={"arquivo": pdf_sel})
-                chunks = resultado["documents"]
+                chunks    = resultado["documents"]
 
             if not chunks:
                 st.error("Nenhum chunk encontrado para este PDF.")
             else:
                 st.write(f"📄 {len(chunks)} partes encontradas. Aplicando estilo **{estilo_sel}**...")
 
-                LOTE = 30
+                LOTE             = 30
                 resumos_parciais = []
-                total_lotes = (len(chunks) + LOTE - 1) // LOTE
-                barra = st.progress(0, text="Analisando partes...")
+                total_lotes      = (len(chunks) + LOTE - 1) // LOTE
+                barra            = st.progress(0, text="Analisando partes...")
 
                 for i in range(0, len(chunks), LOTE):
-                    lote = chunks[i:i + LOTE]
-                    lote_num = i // LOTE + 1
+                    lote       = chunks[i : i + LOTE]
+                    lote_num   = i // LOTE + 1
                     texto_lote = "\n\n---PARTE---\n\n".join(lote)
-                    prompt = estilo["prompt_lote"](pdf_sel, texto_lote)
+                    prompt     = estilo["prompt_lote"](pdf_sel, texto_lote)
 
                     try:
                         resumo = gerar_resposta(prompt)
@@ -433,7 +456,7 @@ COMPARACAO FINAL CONSOLIDADA:"""
                     resumo_final = resumos_parciais[0]
                 else:
                     with st.spinner("Consolidando análise de todas as partes..."):
-                        consolidado = "\n\n===\n\n".join(
+                        consolidado  = "\n\n===\n\n".join(
                             [f"Secao {i+1}:\n{r}" for i, r in enumerate(resumos_parciais)]
                         )
                         prompt_final = estilo["prompt_final"](pdf_sel, consolidado)
@@ -442,10 +465,10 @@ COMPARACAO FINAL CONSOLIDADA:"""
                         except Exception as e:
                             resumo_final = f"(Erro na consolidacao: {e})\n\n" + consolidado
 
-                st.session_state["ultimo_resumo"] = resumo_final
+                st.session_state["ultimo_resumo"]     = resumo_final
                 st.session_state["ultimo_pdf_resumo"] = pdf_sel
-                st.session_state["ultimo_banco_r"] = banco_sel_r
-                st.session_state["ultimo_estilo_r"] = estilo_sel
+                st.session_state["ultimo_banco_r"]    = banco_sel_r
+                st.session_state["ultimo_estilo_r"]   = estilo_sel
 
         if "ultimo_resumo" in st.session_state:
             estilo_label = st.session_state.get("ultimo_estilo_r", "")
@@ -453,17 +476,17 @@ COMPARACAO FINAL CONSOLIDADA:"""
             st.write(st.session_state["ultimo_resumo"])
 
             pdf_bytes = gerar_pdf_resumo(
-                nome_pdf=st.session_state["ultimo_pdf_resumo"],
-                banco=st.session_state["ultimo_banco_r"],
-                resumo=st.session_state["ultimo_resumo"],
-                estilo=estilo_label
+                nome_pdf = st.session_state["ultimo_pdf_resumo"],
+                banco    = st.session_state["ultimo_banco_r"],
+                resumo   = st.session_state["ultimo_resumo"],
+                estilo   = estilo_label
             )
             nome_arquivo = f"resumo_{st.session_state['ultimo_pdf_resumo']}"
             st.download_button(
-                label="📥 Baixar resumo em PDF",
-                data=pdf_bytes,
-                file_name=nome_arquivo,
-                mime="application/pdf"
+                label     = "📥 Baixar resumo em PDF",
+                data      = pdf_bytes,
+                file_name = nome_arquivo,
+                mime      = "application/pdf"
             )
 
 
@@ -479,8 +502,8 @@ with aba[3]:
     else:
         for banco in bancos:
             try:
-                col = get_colecao(banco)
-                pdfs = listar_pdfs(banco)
+                col    = get_colecao(banco)
+                pdfs   = listar_pdfs(banco)
                 chunks = col.count()
                 with st.expander(f"🗄️ **{banco}** — {chunks} chunks | {len(pdfs)} PDF(s)"):
                     for pdf in pdfs:
