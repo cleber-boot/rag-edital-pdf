@@ -35,6 +35,7 @@ CHROMA_BASE_DIR = "./chroma_bancos"
 MODELO_GROQ     = "moonshotai/kimi-k2-instruct"  # 60 RPM / 300K TPD / 262K ctx
 
 _ERROS_429 = ("429", "rate_limit_exceeded", "rate limit", "too many requests")
+_ERROS_413 = ("413", "request too large", "request_too_large")
 
 
 # ── inicialização ─────────────────────────────────────────────
@@ -124,7 +125,14 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
 
         except Exception as e:
             erro_str = str(e).lower()
+            eh_413   = any(t in erro_str for t in _ERROS_413)
             eh_429   = any(t in erro_str for t in _ERROS_429)
+
+            if eh_413:
+                raise RuntimeError(
+                    f"❌ Prompt muito grande para o modelo ({len(prompt.split())} palavras aprox). "
+                    "Reduza o tamanho do contexto ou use lotes menores."
+                ) from e
 
             if not eh_429:
                 raise
@@ -188,13 +196,33 @@ with aba[0]:
             colecao    = get_colecao(nome_banco)
             st.write(f"📂 Banco: **{nome_banco}**")
 
-            for arquivo in arquivos:
+            total_arquivos = len(arquivos)
+            for idx, arquivo in enumerate(arquivos, 1):
                 conteudo = arquivo.read()
-                with st.spinner(f"Indexando {arquivo.name}..."):
-                    resultado = indexar_pdf_bytes(arquivo.name, conteudo, colecao, cliente_gemini)
+                st.write(f"📄 **[{idx}/{total_arquivos}]** {arquivo.name}")
+
+                barra     = st.progress(0, text="Aguardando embeddings...")
+                status_tx = st.empty()
+
+                def atualizar_progresso(lote_num, total_lotes, _b=barra, _s=status_tx):
+                    pct = lote_num / total_lotes
+                    _b.progress(pct, text=f"Lote {lote_num}/{total_lotes} de embeddings...")
+                    _s.caption(f"⏳ Processando... {int(pct*100)}%")
+
+                eh_ultimo = (idx == total_arquivos)
+                resultado = indexar_pdf_bytes(
+                    arquivo.name, conteudo, colecao, cliente_gemini,
+                    callback=atualizar_progresso,
+                    pausar_ao_final=not eh_ultimo,
+                )
+
+                barra.empty()
+                status_tx.empty()
 
                 if resultado["status"] == "ok":
                     st.success(f"✅ {arquivo.name} — {resultado['chunks']} chunks indexados")
+                    if not eh_ultimo:
+                        st.caption("⏸️ Aguardando 10s antes do próximo arquivo...")
                 elif resultado["status"] == "ja_indexado":
                     st.warning(f"↩️ {arquivo.name} — já indexado, pulando")
                 else:
@@ -431,7 +459,7 @@ COMPARACAO FINAL CONSOLIDADA:"""
             else:
                 st.write(f"📄 {len(chunks)} partes encontradas. Aplicando estilo **{estilo_sel}**...")
 
-                LOTE             = 30
+                LOTE             = 5  # ~200 tok/chunk × 5 = ~1000 tok de contexto por chamada
                 resumos_parciais = []
                 total_lotes      = (len(chunks) + LOTE - 1) // LOTE
                 barra            = st.progress(0, text="Analisando partes...")
@@ -456,14 +484,30 @@ COMPARACAO FINAL CONSOLIDADA:"""
                     resumo_final = resumos_parciais[0]
                 else:
                     with st.spinner("Consolidando análise de todas as partes..."):
-                        consolidado  = "\n\n===\n\n".join(
-                            [f"Secao {i+1}:\n{r}" for i, r in enumerate(resumos_parciais)]
-                        )
-                        prompt_final = estilo["prompt_final"](pdf_sel, consolidado)
-                        try:
-                            resumo_final = gerar_resposta(prompt_final)
-                        except Exception as e:
-                            resumo_final = f"(Erro na consolidacao: {e})\n\n" + consolidado
+                        # Agrupa em sub-grupos de 3 seções para não estourar 10K TPM
+                        GRUPO = 3
+                        grupos = [resumos_parciais[g:g+GRUPO] for g in range(0, len(resumos_parciais), GRUPO)]
+                        intermediarios = []
+                        for gi, grupo in enumerate(grupos):
+                            sub = "\n\n===\n\n".join([f"Secao {i+1}:\n{r}" for i, r in enumerate(grupo)])
+                            prompt_sub = estilo["prompt_final"](pdf_sel, sub)
+                            try:
+                                intermediarios.append(gerar_resposta(prompt_sub))
+                            except Exception as e:
+                                intermediarios.append(f"[Erro grupo {gi+1}: {e}]")
+
+                        if len(intermediarios) == 1:
+                            resumo_final = intermediarios[0]
+                        else:
+                            # Segunda passagem: consolida os intermediários
+                            consolidado_final = "\n\n===\n\n".join(
+                                [f"Parte {i+1}:\n{r}" for i, r in enumerate(intermediarios)]
+                            )
+                            prompt_final = estilo["prompt_final"](pdf_sel, consolidado_final)
+                            try:
+                                resumo_final = gerar_resposta(prompt_final)
+                            except Exception as e:
+                                resumo_final = f"(Erro final: {e})\n\n" + consolidado_final
 
                 st.session_state["ultimo_resumo"]     = resumo_final
                 st.session_state["ultimo_pdf_resumo"] = pdf_sel

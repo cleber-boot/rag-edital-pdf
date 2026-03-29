@@ -21,3 +21,6 @@ fpdf2>=2.7.9
  
 # Variáveis de ambiente
 python-dotenv>=1.0.0
+
+# Groq (LLM — Kimi K2)
+groq>=0.28.0
