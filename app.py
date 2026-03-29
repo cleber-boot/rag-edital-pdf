@@ -142,7 +142,6 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
                     f"Limite de {max_tentativas} tentativas no Groq. Último erro: {e}"
                 )
 
-            # Tenta ler retry-after, mas limita a 60s (Groq às vezes retorna valores absurdos)
             ESPERA_MAX_RETRY_AFTER = 60.0
             retry_after = None
             if hasattr(e, "response") and e.response is not None:
@@ -462,7 +461,9 @@ COMPARACAO FINAL CONSOLIDADA:"""
             else:
                 st.write(f"📄 {len(chunks)} partes encontradas. Aplicando estilo **{estilo_sel}**...")
 
-                LOTE             = 5  # ~200 tok/chunk × 5 = ~1000 tok de contexto por chamada
+                # ── CORREÇÃO: lote maior = menos chamadas = menos 429 ──
+                LOTE             = 20   # era 5 — reduz chamadas em 4x
+                PAUSA_ENTRE_LOTES = 3   # segundos entre lotes para respeitar RPM
                 resumos_parciais = []
                 total_lotes      = (len(chunks) + LOTE - 1) // LOTE
                 barra            = st.progress(0, text="Analisando partes...")
@@ -481,13 +482,16 @@ COMPARACAO FINAL CONSOLIDADA:"""
 
                     barra.progress(lote_num / total_lotes, text=f"Parte {lote_num}/{total_lotes}...")
 
+                    # Pausa entre lotes para não estourar RPM
+                    if lote_num < total_lotes:
+                        time.sleep(PAUSA_ENTRE_LOTES)
+
                 barra.empty()
 
                 if len(resumos_parciais) == 1:
                     resumo_final = resumos_parciais[0]
                 else:
                     with st.spinner("Consolidando análise de todas as partes..."):
-                        # Agrupa em sub-grupos de 3 seções para não estourar 10K TPM
                         GRUPO = 3
                         grupos = [resumos_parciais[g:g+GRUPO] for g in range(0, len(resumos_parciais), GRUPO)]
                         intermediarios = []
@@ -496,13 +500,14 @@ COMPARACAO FINAL CONSOLIDADA:"""
                             prompt_sub = estilo["prompt_final"](pdf_sel, sub)
                             try:
                                 intermediarios.append(gerar_resposta(prompt_sub))
+                                if gi < len(grupos) - 1:
+                                    time.sleep(PAUSA_ENTRE_LOTES)
                             except Exception as e:
                                 intermediarios.append(f"[Erro grupo {gi+1}: {e}]")
 
                         if len(intermediarios) == 1:
                             resumo_final = intermediarios[0]
                         else:
-                            # Segunda passagem: consolida os intermediários
                             consolidado_final = "\n\n===\n\n".join(
                                 [f"Parte {i+1}:\n{r}" for i, r in enumerate(intermediarios)]
                             )
