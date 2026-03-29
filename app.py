@@ -508,9 +508,17 @@ COMPARACAO FINAL CONSOLIDADA:"""
                         if len(intermediarios) == 1:
                             resumo_final = intermediarios[0]
                         else:
-                            consolidado_final = "\n\n===\n\n".join(
-                                [f"Parte {i+1}:\n{r}" for i, r in enumerate(intermediarios)]
-                            )
+                            # Trunca cada intermediário a 400 palavras para não estourar o contexto
+                            MAX_PALAVRAS_PARTE = 400
+                            partes_truncadas = []
+                            for i, r in enumerate(intermediarios):
+                                palavras = r.split()
+                                truncado = " ".join(palavras[:MAX_PALAVRAS_PARTE])
+                                if len(palavras) > MAX_PALAVRAS_PARTE:
+                                    truncado += " [...]"
+                                partes_truncadas.append(f"Parte {i+1}:\n{truncado}")
+
+                            consolidado_final = "\n\n===\n\n".join(partes_truncadas)
                             prompt_final = estilo["prompt_final"](pdf_sel, consolidado_final)
                             try:
                                 resumo_final = gerar_resposta(prompt_final)
