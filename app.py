@@ -28,6 +28,11 @@ from gerar_pdf import gerar_pdf_resumo, gerar_pdf_resposta
 
 load_dotenv()
 
+# Suprime logs verbosos do httpx e groq (429 retry noise)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("groq").setLevel(logging.WARNING)
+logging.getLogger("groq._base_client").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 # ── configuração ──────────────────────────────────────────────
@@ -107,8 +112,8 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
     Lê o header 'retry-after' quando disponível para respeitar exatamente
     o tempo sugerido pela API.
     """
-    espera_base = 20.0
-    espera_max  = 120.0
+    espera_base = 10.0
+    espera_max  = 60.0
 
     for tentativa in range(1, max_tentativas + 1):
         try:
@@ -119,7 +124,7 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
                     {"role": "user",   "content": prompt},
                 ],
                 temperature=0.2,
-                max_tokens=2048,
+                max_tokens=4096,
             )
             return resposta.choices[0].message.content
 
@@ -519,9 +524,9 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
             else:
                 st.write(f"📄 {len(chunks)} partes encontradas. Aplicando estilo **{estilo_sel}**...")
 
-                LOTE              = 3    # kimi-k2: 10k TPM — lotes de 3 chunks
-                PAUSA_ENTRE_LOTES = 10   # pausa moderada com 60 RPM
-                MAX_PARALLEL      = 4    # kimi-k2: 60 RPM — 4 paralelas
+                LOTE              = 5    # kimi-k2: 10k TPM — 5 chunks (~3k tokens entrada)
+                PAUSA_ENTRE_LOTES = 8    # kimi tem 60 RPM — pausa menor
+                MAX_PARALLEL      = 5    # 5 paralelas dentro dos 60 RPM
                 total_lotes       = (len(chunks) + LOTE - 1) // LOTE
                 resumos_parciais  = [None] * total_lotes
                 barra             = st.progress(0, text="Analisando partes...")
@@ -554,7 +559,7 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
                 if len(resumos_parciais) == 1:
                     resumo_final = resumos_parciais[0]
                 else:
-                    GRUPO = 3
+                    GRUPO = 5
                     grupos = [resumos_parciais[g:g+GRUPO] for g in range(0, len(resumos_parciais), GRUPO)]
                     intermediarios = []
 
