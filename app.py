@@ -218,7 +218,7 @@ def _consolidar_gemini(prompt: str, max_tentativas: int = 5) -> str:
     for tentativa in range(1, max_tentativas + 1):
         try:
             resp = cliente_gemini.models.generate_content(
-                model="gemini-2.0-flash-lite",
+                model="gemini-2.5-flash-lite",
                 contents=prompt,
                 config=gtypes.GenerateContentConfig(
                     temperature=0.2,
