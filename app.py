@@ -207,6 +207,35 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
             time.sleep(espera)
 
 
+# ── consolidação via Gemini (contexto maior, sem limite de TPD diário restrito) ──
+def _consolidar_gemini(prompt: str, max_tentativas: int = 5) -> str:
+    """
+    Usa o Gemini 2.0 Flash Lite para consolidar resumos parciais.
+    Vantagens: contexto de 1M tokens, sem consumir TPD do Groq.
+    """
+    from google.genai import types as gtypes
+    for tentativa in range(1, max_tentativas + 1):
+        try:
+            resp = cliente_gemini.models.generate_content(
+                model="gemini-2.0-flash-lite",
+                contents=prompt,
+                config=gtypes.GenerateContentConfig(
+                    temperature=0.2,
+                    max_output_tokens=8192,
+                )
+            )
+            return resp.text.strip()
+        except Exception as e:
+            erro = str(e)
+            if "429" in erro or "RESOURCE_EXHAUSTED" in erro:
+                espera = 15 * tentativa
+                logger.warning("[consolidar_gemini] 429 — aguardando %ds...", espera)
+                time.sleep(espera)
+            else:
+                raise
+    raise RuntimeError("Falha na consolidação via Gemini após múltiplas tentativas.")
+
+
 # ── interface ─────────────────────────────────────────────────
 st.set_page_config(page_title="📚 RAG com PDFs", layout="wide")
 st.title("📚 RAG com PDFs")
@@ -606,10 +635,10 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
                         sub        = "\n\n===\n\n".join([f"Secao {i+1}:\n{r}" for i, r in enumerate(grupo)])
                         prompt_sub = estilo["prompt_final"](pdf_sel, sub)
                         try:
-                            intermediarios.append(gerar_resposta(prompt_sub))
+                            intermediarios.append(_consolidar_gemini(prompt_sub))
                             barra_cons.progress((gi + 1) / len(grupos), text=f"Consolidando grupo {gi+1}/{len(grupos)}...")
                             if gi < len(grupos) - 1:
-                                time.sleep(PAUSA_ENTRE_LOTES)
+                                time.sleep(2)
                         except Exception as e:
                             intermediarios.append(f"[Erro grupo {gi+1}: {e}]")
 
@@ -631,7 +660,7 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
                         consolidado_final = "\n\n===\n\n".join(partes_truncadas)
                         prompt_final = estilo["prompt_final"](pdf_sel, consolidado_final)
                         try:
-                            resumo_final = gerar_resposta(prompt_final)
+                            resumo_final = _consolidar_gemini(prompt_final)
                         except Exception as e:
                             resumo_final = f"(Erro final: {e})\n\n" + consolidado_final
 
