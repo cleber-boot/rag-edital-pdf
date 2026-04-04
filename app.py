@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # ── configuração ──────────────────────────────────────────────
 CHROMA_BASE_DIR = "./chroma_bancos"
-MODELO_GROQ     = "meta-llama/llama-4-scout-17b-16e-instruct"
+MODELO_GROQ     = "llama-3.3-70b-versatile"
 
 _ERROS_429 = ("429", "rate_limit_exceeded", "rate limit", "too many requests")
 _ERROS_413 = ("413", "request too large", "request_too_large")
@@ -119,7 +119,7 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
                     {"role": "user",   "content": prompt},
                 ],
                 temperature=0.2,
-                max_tokens=4096,
+                max_tokens=8192,
             )
             return resposta.choices[0].message.content
 
@@ -519,8 +519,8 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
                 st.write(f"📄 {len(chunks)} partes encontradas. Aplicando estilo **{estilo_sel}**...")
 
                 # ── CORREÇÃO: lote maior = menos chamadas = menos 429 ──
-                LOTE              = 10   # menos chunks por lote para caber no TPM
-                PAUSA_ENTRE_LOTES = 15   # pausa maior para respeitar 30k TPM/min
+                LOTE              = 6    # 70b tem 12k TPM — lotes menores
+                PAUSA_ENTRE_LOTES = 20   # pausa maior para respeitar TPM
                 resumos_parciais  = []
                 total_lotes       = (len(chunks) + LOTE - 1) // LOTE
                 barra             = st.progress(0, text="Analisando partes...")
