@@ -39,6 +39,26 @@ logger = logging.getLogger(__name__)
 CHROMA_BASE_DIR = "./chroma_bancos"
 MODELO_GROQ     = "moonshotai/kimi-k2-instruct"
 
+# Fallback automático quando o modelo principal esgota o TPD
+MODELOS_FALLBACK = [
+    "moonshotai/kimi-k2-instruct",   # 1º: kimi — 300k TPD, 10k TPM
+    "qwen/qwen3-32b",                # 2º: qwen — 500k TPD, 6k TPM
+    "llama-3.3-70b-versatile",       # 3º: 70b  — 100k TPD, 12k TPM
+]
+_modelo_atual_idx = [0]  # índice mutável do modelo em uso
+
+
+def _modelo_atual() -> str:
+    return MODELOS_FALLBACK[_modelo_atual_idx[0]]
+
+
+def _avancar_modelo() -> str | None:
+    """Avança para o próximo modelo da lista. Retorna None se esgotou todos."""
+    if _modelo_atual_idx[0] < len(MODELOS_FALLBACK) - 1:
+        _modelo_atual_idx[0] += 1
+        return _modelo_atual()
+    return None
+
 _ERROS_429 = ("429", "rate_limit_exceeded", "rate limit", "too many requests")
 _ERROS_413 = ("413", "request too large", "request_too_large", "context_length_exceeded", "context length", "maximum context")
 
@@ -105,12 +125,12 @@ def listar_pdfs(nome_banco: str) -> list[str]:
         return []
 
 
-# ── geração de resposta via Groq/Kimi K2 com backoff exponencial ─────
+# ── geração de resposta com fallback automático de modelo ─────────────
 def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
     """
-    Chama o Kimi K2 via Groq com retry automático (backoff exponencial + jitter).
-    Lê o header 'retry-after' quando disponível para respeitar exatamente
-    o tempo sugerido pela API.
+    Chama o modelo atual via Groq com retry e backoff exponencial.
+    Se o TPD do modelo estiver esgotado, avança automaticamente para o próximo.
+    Ordem: kimi-k2 → qwen3-32b → llama-3.3-70b
     """
     espera_base = 10.0
     espera_max  = 60.0
@@ -118,7 +138,7 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
     for tentativa in range(1, max_tentativas + 1):
         try:
             resposta = cliente_groq.chat.completions.create(
-                model=MODELO_GROQ,
+                model=_modelo_atual(),
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user",   "content": prompt},
@@ -133,6 +153,7 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
             logger.warning("[gerar_resposta] Erro raw: %s", str(e))
             eh_413   = any(t in erro_str for t in _ERROS_413)
             eh_429   = any(t in erro_str for t in _ERROS_429)
+            eh_tpd   = "tokens per day" in erro_str or "per day" in erro_str
 
             if eh_413:
                 raise RuntimeError(
@@ -142,6 +163,19 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
 
             if not eh_429:
                 raise
+
+            # TPD esgotado — tenta próximo modelo da lista
+            if eh_tpd:
+                proximo = _avancar_modelo()
+                if proximo:
+                    logger.warning("[gerar_resposta] TPD esgotado. Trocando para '%s'", proximo)
+                    st.warning(f"⚠️ Limite diário atingido. Trocando para **{proximo}**...")
+                    continue  # tenta novamente com o novo modelo sem contar tentativa
+                else:
+                    raise RuntimeError(
+                        "❌ Limite diário esgotado em todos os modelos disponíveis. "
+                        "Tente novamente amanhã."
+                    )
 
             if tentativa == max_tentativas:
                 raise RuntimeError(
@@ -162,13 +196,14 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
                 espera = max(espera, 2.0)
 
             logger.warning(
-                "[gerar_resposta] 429 Groq/Kimi (tentativa %d/%d). Aguardando %.1fs...",
-                tentativa, max_tentativas, espera,
+                "[gerar_resposta] 429 Groq/%s (tentativa %d/%d). Aguardando %.1fs...",
+                _modelo_atual(), tentativa, max_tentativas, espera,
             )
             st.warning(
                 f"⏳ Limite da API Groq atingido. Aguardando {espera:.0f}s... "
                 f"(tentativa {tentativa}/{max_tentativas})"
             )
+            time.sleep(espera)
             time.sleep(espera)
 
 
