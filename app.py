@@ -36,32 +36,75 @@ logging.getLogger("google_genai.models").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
+# ── pool de chaves ────────────────────────────────────────────────────────────
+
+def _carregar_chaves(prefixo: str) -> list[str]:
+    """Carrega todas as chaves do .env com o prefixo dado.
+    Ex: GEMINI_API_KEY, GEMINI_API_KEY_2, GEMINI_API_KEY_3...
+    """
+    chaves = []
+    v = os.environ.get(prefixo)
+    if v:
+        chaves.append(v)
+    i = 2
+    while True:
+        v = os.environ.get(f"{prefixo}_{i}")
+        if not v:
+            break
+        chaves.append(v)
+        i += 1
+    return chaves
+
+_gemini_keys = _carregar_chaves("GEMINI_API_KEY")
+_groq_keys   = _carregar_chaves("GROQ_API_KEY")
+_gemini_idx  = [0]
+_groq_idx    = [0]
+
+def _gemini_cliente_atual() -> genai.Client:
+    return genai.Client(api_key=_gemini_keys[_gemini_idx[0]])
+
+def _groq_cliente_atual() -> Groq:
+    return Groq(api_key=_groq_keys[_groq_idx[0]])
+
+def _avancar_gemini() -> bool:
+    if _gemini_idx[0] < len(_gemini_keys) - 1:
+        _gemini_idx[0] += 1
+        logger.warning("[pool] Chave Gemini %d/%d", _gemini_idx[0]+1, len(_gemini_keys))
+        return True
+    return False
+
+def _avancar_groq_key() -> bool:
+    if _groq_idx[0] < len(_groq_keys) - 1:
+        _groq_idx[0] += 1
+        logger.warning("[pool] Chave Groq %d/%d", _groq_idx[0]+1, len(_groq_keys))
+        return True
+    return False
+
 # ── configuração ──────────────────────────────────────────────
 CHROMA_BASE_DIR = "./chroma_bancos"
-MODELO_GROQ     = "moonshotai/kimi-k2-instruct"
 
-# Fallback automático quando o modelo principal esgota o TPD
 MODELOS_FALLBACK = [
-    "moonshotai/kimi-k2-instruct",   # 1º: kimi — 300k TPD, 10k TPM
-    "qwen/qwen3-32b",                # 2º: qwen — 500k TPD, 6k TPM
-    "llama-3.3-70b-versatile",       # 3º: 70b  — 100k TPD, 12k TPM
+    "moonshotai/kimi-k2-instruct",
+    "qwen/qwen3-32b",
+    "llama-3.3-70b-versatile",
 ]
-_modelo_atual_idx = [0]  # índice mutável do modelo em uso — resetado a cada resumo
-
+_modelo_atual_idx = [0]
 
 def _resetar_modelo():
-    """Reseta para o modelo principal no início de cada operação."""
     _modelo_atual_idx[0] = 0
-
+    _groq_idx[0] = 0
+    _gemini_idx[0] = 0
 
 def _modelo_atual() -> str:
     return MODELOS_FALLBACK[_modelo_atual_idx[0]]
 
-
 def _avancar_modelo() -> str | None:
-    """Avança para o próximo modelo da lista. Retorna None se esgotou todos."""
+    """Tenta outra chave Groq antes de mudar de modelo."""
+    if _avancar_groq_key():
+        return _modelo_atual()
     if _modelo_atual_idx[0] < len(MODELOS_FALLBACK) - 1:
         _modelo_atual_idx[0] += 1
+        _groq_idx[0] = 0
         return _modelo_atual()
     return None
 
@@ -72,24 +115,16 @@ _ERROS_413 = ("413", "request too large", "request_too_large", "context_length_e
 # ── inicialização ─────────────────────────────────────────────
 @st.cache_resource
 def inicializar():
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    groq_key   = os.environ.get("GROQ_API_KEY")
-
-    erros = []
-    if not gemini_key:
-        erros.append("GEMINI_API_KEY")
-    if not groq_key:
-        erros.append("GROQ_API_KEY")
-    if erros:
-        st.error(f"❌ Chaves não encontradas no .env: {', '.join(erros)}")
+    if not _gemini_keys:
+        st.error("❌ GEMINI_API_KEY não encontrada no .env")
         st.stop()
+    if not _groq_keys:
+        st.error("❌ GROQ_API_KEY não encontrada no .env")
+        st.stop()
+    ranker = Ranker()
+    return ranker
 
-    cliente_gemini = genai.Client(api_key=gemini_key)
-    cliente_groq   = Groq(api_key=groq_key)
-    ranker         = Ranker()
-    return cliente_gemini, cliente_groq, ranker
-
-cliente_gemini, cliente_groq, ranker = inicializar()
+ranker = inicializar()
 
 
 # ── helpers de banco ──────────────────────────────────────────
@@ -143,7 +178,7 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
 
     for tentativa in range(1, max_tentativas + 1):
         try:
-            resposta = cliente_groq.chat.completions.create(
+            resposta = _groq_cliente_atual().chat.completions.create(
                 model=_modelo_atual(),
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -215,14 +250,11 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
 
 # ── consolidação via Gemini (contexto maior, sem limite de TPD diário restrito) ──
 def _consolidar_gemini(prompt: str, max_tentativas: int = 5) -> str:
-    """
-    Usa o Gemini 2.0 Flash Lite para consolidar resumos parciais.
-    Vantagens: contexto de 1M tokens, sem consumir TPD do Groq.
-    """
+    """Usa Gemini para consolidar resumos. Rotaciona chaves em caso de 403/429."""
     from google.genai import types as gtypes
     for tentativa in range(1, max_tentativas + 1):
         try:
-            resp = cliente_gemini.models.generate_content(
+            resp = _gemini_cliente_atual().models.generate_content(
                 model="gemini-2.5-flash-lite",
                 contents=prompt,
                 config=gtypes.GenerateContentConfig(
@@ -233,9 +265,17 @@ def _consolidar_gemini(prompt: str, max_tentativas: int = 5) -> str:
             return resp.text.strip()
         except Exception as e:
             erro = str(e)
+            if "403" in erro or "leaked" in erro.lower() or "permission" in erro.lower():
+                if _avancar_gemini():
+                    logger.warning("[consolidar_gemini] 403 — trocando chave Gemini")
+                    continue
+                raise RuntimeError("❌ Todas as chaves Gemini estão bloqueadas ou inválidas.")
             if "429" in erro or "RESOURCE_EXHAUSTED" in erro:
-                espera = min(30 * (2 ** (tentativa - 1)), 120)  # 30s, 60s, 120s...
-                logger.warning("[consolidar_gemini] 429 — aguardando %ds...", espera)
+                if _avancar_gemini():
+                    logger.warning("[consolidar_gemini] 429 — trocando chave Gemini")
+                    continue
+                espera = min(30 * (2 ** (tentativa - 1)), 120)
+                logger.warning("[consolidar_gemini] 429 sem mais chaves — aguardando %ds", espera)
                 time.sleep(espera)
             else:
                 raise
@@ -289,7 +329,7 @@ with aba[0]:
 
                 eh_ultimo = (idx == total_arquivos)
                 resultado = indexar_pdf_bytes(
-                    arquivo.name, conteudo, colecao, cliente_gemini,
+                    arquivo.name, conteudo, colecao, _gemini_cliente_atual(),
                     callback=atualizar_progresso,
                     pausar_ao_final=not eh_ultimo,
                 )
@@ -344,7 +384,7 @@ with aba[1]:
                 else:
                     with st.spinner("Buscando trechos relevantes..."):
                         try:
-                            trechos_raw = buscar_trechos(pergunta, colecao, cliente_gemini, top_k=top_k)
+                            trechos_raw = buscar_trechos(pergunta, colecao, _gemini_cliente_atual(), top_k=top_k)
                             trechos     = rerankar_trechos(pergunta, trechos_raw, ranker, top_n=top_n)
                         except Exception as e:
                             st.error(f"❌ Erro na busca: {e}")
