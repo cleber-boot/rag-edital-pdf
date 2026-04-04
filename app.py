@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # ── configuração ──────────────────────────────────────────────
 CHROMA_BASE_DIR = "./chroma_bancos"
-MODELO_GROQ     = "llama-3.3-70b-versatile"
+MODELO_GROQ     = "qwen/qwen3-32b"
 
 _ERROS_429 = ("429", "rate_limit_exceeded", "rate limit", "too many requests")
 _ERROS_413 = ("413", "request too large", "request_too_large")
@@ -519,8 +519,8 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
                 st.write(f"📄 {len(chunks)} partes encontradas. Aplicando estilo **{estilo_sel}**...")
 
                 # ── CORREÇÃO: lote maior = menos chamadas = menos 429 ──
-                LOTE              = 6    # 70b tem 12k TPM — lotes menores
-                PAUSA_ENTRE_LOTES = 20   # pausa maior para respeitar TPM
+                LOTE              = 10   # qwen3-32b tem 60 RPM e 500k TPD
+                PAUSA_ENTRE_LOTES = 10   # pausa menor graças ao 60 RPM
                 resumos_parciais  = []
                 total_lotes       = (len(chunks) + LOTE - 1) // LOTE
                 barra             = st.progress(0, text="Analisando partes...")
