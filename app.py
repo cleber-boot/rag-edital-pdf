@@ -520,29 +520,39 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
                 st.write(f"📄 {len(chunks)} partes encontradas. Aplicando estilo **{estilo_sel}**...")
 
                 # ── CORREÇÃO: lote maior = menos chamadas = menos 429 ──
-                LOTE              = 2    # qwen3-32b tem 6k TPM — máximo seguro
-                PAUSA_ENTRE_LOTES = 12   # garante reset do TPM entre lotes
-                resumos_parciais  = []
-                total_lotes       = (len(chunks) + LOTE - 1) // LOTE
+                LOTE              = 2    # qwen3-32b: 6k TPM — 2 chunks por lote
+                PAUSA_ENTRE_LOTES = 12   # segundos entre lotes na consolidação
+                MAX_PARALLEL      = 4    # chamadas paralelas simultâneas
+                resumos_parciais  = [None] * ((len(chunks) + LOTE - 1) // LOTE)
+                total_lotes       = len(resumos_parciais)
                 barra             = st.progress(0, text="Analisando partes...")
+                concluidos        = [0]
 
-                for i in range(0, len(chunks), LOTE):
-                    lote       = chunks[i : i + LOTE]
-                    lote_num   = i // LOTE + 1
+                import concurrent.futures, threading
+                lock = threading.Lock()
+
+                def processar_lote(args):
+                    idx, lote = args
                     texto_lote = "\n\n---PARTE---\n\n".join(lote)
                     prompt     = estilo["prompt_lote"](pdf_sel, texto_lote)
-
                     try:
-                        resumo = gerar_resposta(prompt)
-                        resumos_parciais.append(resumo)
+                        resultado = gerar_resposta(prompt)
                     except Exception as e:
-                        resumos_parciais.append(f"[Erro no lote {lote_num}: {e}]")
+                        resultado = f"[Erro no lote {idx+1}: {e}]"
+                    with lock:
+                        concluidos[0] += 1
+                        barra.progress(concluidos[0] / total_lotes,
+                                       text=f"Parte {concluidos[0]}/{total_lotes}...")
+                    return idx, resultado
 
-                    barra.progress(lote_num / total_lotes, text=f"Parte {lote_num}/{total_lotes}...")
+                lotes = [(i // LOTE, chunks[i:i+LOTE])
+                         for i, _ in enumerate(range(0, len(chunks), LOTE))
+                         for _ in [None] if i % LOTE == 0]
+                lotes = [(j, chunks[j*LOTE:(j+1)*LOTE]) for j in range(total_lotes)]
 
-                    # Pausa entre lotes para não estourar RPM
-                    if lote_num < total_lotes:
-                        time.sleep(PAUSA_ENTRE_LOTES)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_PARALLEL) as ex:
+                    for idx, resultado in ex.map(processar_lote, lotes):
+                        resumos_parciais[idx] = resultado
 
                 barra.empty()
 
