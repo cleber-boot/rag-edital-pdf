@@ -119,7 +119,7 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
                     {"role": "user",   "content": prompt},
                 ],
                 temperature=0.2,
-                max_tokens=4096,
+                max_tokens=2048,
             )
             return resposta.choices[0].message.content
 
@@ -520,8 +520,8 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
                 st.write(f"📄 {len(chunks)} partes encontradas. Aplicando estilo **{estilo_sel}**...")
 
                 # ── CORREÇÃO: lote maior = menos chamadas = menos 429 ──
-                LOTE              = 10   # qwen3-32b tem 60 RPM e 500k TPD
-                PAUSA_ENTRE_LOTES = 10   # pausa menor graças ao 60 RPM
+                LOTE              = 2    # qwen3-32b tem 6k TPM — máximo seguro
+                PAUSA_ENTRE_LOTES = 12   # garante reset do TPM entre lotes
                 resumos_parciais  = []
                 total_lotes       = (len(chunks) + LOTE - 1) // LOTE
                 barra             = st.progress(0, text="Analisando partes...")
