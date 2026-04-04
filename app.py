@@ -46,7 +46,12 @@ MODELOS_FALLBACK = [
     "qwen/qwen3-32b",                # 2º: qwen — 500k TPD, 6k TPM
     "llama-3.3-70b-versatile",       # 3º: 70b  — 100k TPD, 12k TPM
 ]
-_modelo_atual_idx = [0]  # índice mutável do modelo em uso
+_modelo_atual_idx = [0]  # índice mutável do modelo em uso — resetado a cada resumo
+
+
+def _resetar_modelo():
+    """Reseta para o modelo principal no início de cada operação."""
+    _modelo_atual_idx[0] = 0
 
 
 def _modelo_atual() -> str:
@@ -589,6 +594,7 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
             else:
                 st.write(f"📄 {len(chunks)} partes encontradas. Aplicando estilo **{estilo_sel}**...")
 
+                _resetar_modelo()  # reseta para kimi-k2 a cada novo resumo
                 LOTE              = 5    # kimi-k2: 10k TPM — 5 chunks (~3k tokens entrada)
                 PAUSA_ENTRE_LOTES = 8    # kimi tem 60 RPM — pausa menor
                 MAX_PARALLEL      = 5    # 5 paralelas dentro dos 60 RPM
@@ -656,7 +662,7 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
                     if len(intermediarios) == 1:
                         resumo_final = intermediarios[0]
                     else:
-                        MAX_PALAVRAS_PARTE = 800
+                        MAX_PALAVRAS_PARTE = 300
                         partes_truncadas = []
                         for i, r in enumerate(intermediarios):
                             palavras = r.split()
