@@ -32,6 +32,7 @@ load_dotenv()
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("groq").setLevel(logging.WARNING)
 logging.getLogger("groq._base_client").setLevel(logging.WARNING)
+logging.getLogger("google_genai.models").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +229,7 @@ def _consolidar_gemini(prompt: str, max_tentativas: int = 5) -> str:
         except Exception as e:
             erro = str(e)
             if "429" in erro or "RESOURCE_EXHAUSTED" in erro:
-                espera = 15 * tentativa
+                espera = min(30 * (2 ** (tentativa - 1)), 120)  # 30s, 60s, 120s...
                 logger.warning("[consolidar_gemini] 429 — aguardando %ds...", espera)
                 time.sleep(espera)
             else:
@@ -625,22 +626,29 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
                 else:
                     GRUPO = 5
                     grupos = [resumos_parciais[g:g+GRUPO] for g in range(0, len(resumos_parciais), GRUPO)]
-                    intermediarios = []
+                    intermediarios = [None] * len(grupos)
 
                     barra_cons  = st.progress(0, text="Consolidando partes...")
                     status_cons = st.empty()
 
-                    for gi, grupo in enumerate(grupos):
-                        status_cons.caption(f"⏳ Consolidando grupo {gi+1} de {len(grupos)}...")
+                    def _consolidar_grupo(args):
+                        gi, grupo = args
                         sub        = "\n\n===\n\n".join([f"Secao {i+1}:\n{r}" for i, r in enumerate(grupo)])
                         prompt_sub = estilo["prompt_final"](pdf_sel, sub)
                         try:
-                            intermediarios.append(_consolidar_gemini(prompt_sub))
-                            barra_cons.progress((gi + 1) / len(grupos), text=f"Consolidando grupo {gi+1}/{len(grupos)}...")
-                            if gi < len(grupos) - 1:
-                                time.sleep(2)
+                            return gi, _consolidar_gemini(prompt_sub)
                         except Exception as e:
-                            intermediarios.append(f"[Erro grupo {gi+1}: {e}]")
+                            return gi, f"[Erro grupo {gi+1}: {e}]"
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+                        futuros_cons = {ex.submit(_consolidar_grupo, (gi, g)): gi for gi, g in enumerate(grupos)}
+                        concluidos_cons = 0
+                        for futuro in concurrent.futures.as_completed(futuros_cons):
+                            gi, resultado = futuro.result()
+                            intermediarios[gi] = resultado
+                            concluidos_cons += 1
+                            barra_cons.progress(concluidos_cons / len(grupos),
+                                                text=f"Consolidando grupo {concluidos_cons}/{len(grupos)}...")
 
                     barra_cons.progress(1.0, text="Gerando consolidação final...")
                     status_cons.caption("⏳ Gerando texto final consolidado...")
