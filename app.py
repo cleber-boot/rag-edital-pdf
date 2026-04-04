@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # ── configuração ──────────────────────────────────────────────
 CHROMA_BASE_DIR = "./chroma_bancos"
-MODELO_GROQ     = "llama-3.3-70b-versatile"
+MODELO_GROQ     = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 _ERROS_429 = ("429", "rate_limit_exceeded", "rate limit", "too many requests")
 _ERROS_413 = ("413", "request too large", "request_too_large")
@@ -462,9 +462,9 @@ COMPARACAO FINAL CONSOLIDADA:"""
                 st.write(f"📄 {len(chunks)} partes encontradas. Aplicando estilo **{estilo_sel}**...")
 
                 # ── CORREÇÃO: lote maior = menos chamadas = menos 429 ──
-                LOTE              = 8    # chunks por lote
+                LOTE              = 15   # llama-4-scout suporta 30k TPM
                 PAUSA_ENTRE_LOTES = 5    # segundos entre lotes para respeitar RPM
-                MAX_CHARS_CHUNK   = 400  # trunca cada chunk antes de montar o prompt
+                MAX_CHARS_CHUNK   = 600  # mais contexto por chunk
                 resumos_parciais  = []
                 total_lotes       = (len(chunks) + LOTE - 1) // LOTE
                 barra             = st.progress(0, text="Analisando partes...")
