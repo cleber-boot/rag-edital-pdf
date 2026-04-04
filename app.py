@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # ── configuração ──────────────────────────────────────────────
 CHROMA_BASE_DIR = "./chroma_bancos"
-MODELO_GROQ     = "qwen/qwen3-32b"
+MODELO_GROQ     = "moonshotai/kimi-k2-instruct"
 
 _ERROS_429 = ("429", "rate_limit_exceeded", "rate limit", "too many requests")
 _ERROS_413 = ("413", "request too large", "request_too_large", "context_length_exceeded", "context length", "maximum context")
@@ -519,9 +519,9 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
             else:
                 st.write(f"📄 {len(chunks)} partes encontradas. Aplicando estilo **{estilo_sel}**...")
 
-                LOTE              = 2    # qwen3-32b: 6k TPM — 2 chunks por lote
-                PAUSA_ENTRE_LOTES = 12   # segundos entre lotes na consolidação
-                MAX_PARALLEL      = 4    # chamadas paralelas simultâneas
+                LOTE              = 3    # kimi-k2: 10k TPM — lotes de 3 chunks
+                PAUSA_ENTRE_LOTES = 10   # pausa moderada com 60 RPM
+                MAX_PARALLEL      = 6    # kimi-k2: 60 RPM — 6 paralelas
                 total_lotes       = (len(chunks) + LOTE - 1) // LOTE
                 resumos_parciais  = [None] * total_lotes
                 barra             = st.progress(0, text="Analisando partes...")
