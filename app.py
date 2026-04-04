@@ -463,8 +463,7 @@ COMPARACAO FINAL CONSOLIDADA:"""
 
                 # ── CORREÇÃO: lote maior = menos chamadas = menos 429 ──
                 LOTE              = 15   # llama-4-scout suporta 30k TPM
-                PAUSA_ENTRE_LOTES = 5    # segundos entre lotes para respeitar RPM
-                MAX_CHARS_CHUNK   = 600  # mais contexto por chunk
+                PAUSA_ENTRE_LOTES = 5    # segundos entre lotes
                 resumos_parciais  = []
                 total_lotes       = (len(chunks) + LOTE - 1) // LOTE
                 barra             = st.progress(0, text="Analisando partes...")
@@ -472,8 +471,7 @@ COMPARACAO FINAL CONSOLIDADA:"""
                 for i in range(0, len(chunks), LOTE):
                     lote       = chunks[i : i + LOTE]
                     lote_num   = i // LOTE + 1
-                    lote_trunc = [c[:MAX_CHARS_CHUNK] for c in lote]
-                    texto_lote = "\n\n---PARTE---\n\n".join(lote_trunc)
+                    texto_lote = "\n\n---PARTE---\n\n".join(lote)
                     prompt     = estilo["prompt_lote"](pdf_sel, texto_lote)
 
                     try:
