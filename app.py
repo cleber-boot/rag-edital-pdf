@@ -325,104 +325,161 @@ with aba[2]:
     ESTILOS_RESUMO = {
         "📖 Didático": {
             "descricao": "Explica cada parte do texto em linguagem simples, com exemplos do cotidiano.",
-            "prompt_lote": lambda pdf, texto: f"""Voce e um professor explicando um documento para um aluno iniciante.
-Abaixo estao trechos do documento '{pdf}'.
-Para CADA parte do texto encontrada, explique o que ela significa em linguagem simples e direta.
-Use exemplos do cotidiano quando possivel.
-Organize a explicacao em topicos, um para cada parte do texto.
+            "prompt_lote": lambda pdf, texto: f"""Voce e um professor experiente explicando o documento '{pdf}' para um aluno iniciante.
+Abaixo estao trechos do documento separados por ---PARTE---.
+
+Para CADA parte do texto:
+1. Explique detalhadamente o que ela significa em linguagem simples e acessivel
+2. Destaque os conceitos, regras, prazos, valores ou obrigacoes mais importantes
+3. Use exemplos praticos do cotidiano para ilustrar quando possivel
+4. Nao omita informacoes relevantes — seja completo e extenso
+
+Escreva pelo menos 3 paragrafos por parte. Organize em topicos numerados, um por parte.
 
 TRECHOS:
 {texto}
 
-EXPLICACAO DIDATICA DE CADA PARTE:""",
-            "prompt_final": lambda pdf, consolidado: f"""Voce recebeu explicacoes didaticas de varias partes do documento '{pdf}'.
-Consolide tudo em um unico texto explicativo, organizado e coeso, mantendo a linguagem simples.
-Preserve as explicacoes de cada parte mas elimine repeticoes.
+EXPLICACAO DIDATICA DETALHADA DE CADA PARTE:""",
+            "prompt_final": lambda pdf, consolidado: f"""Voce recebeu explicacoes didaticas detalhadas de varias secoes do documento '{pdf}'.
+Consolide tudo em um unico documento explicativo completo, organizado e coeso.
 
-PARTES EXPLICADAS:
+Instrucoes:
+- Mantenha TODAS as informacoes importantes de cada secao — nao resuma demais
+- Organize por temas ou capitulos logicos
+- Use linguagem simples mas seja extenso e detalhado
+- Inclua todos os conceitos, regras, prazos e obrigacoes mencionados
+- O texto final deve ser longo o suficiente para substituir a leitura do documento original
+
+SECOES EXPLICADAS:
 {consolidado}
 
-EXPLICACAO FINAL CONSOLIDADA:"""
+DOCUMENTO EXPLICATIVO FINAL COMPLETO:"""
         },
         "🔬 Técnico": {
             "descricao": "Analisa cada parte com linguagem técnica, mantendo termos e referências do documento.",
-            "prompt_lote": lambda pdf, texto: f"""Voce e um especialista tecnico analisando o documento '{pdf}'.
-Para CADA parte do texto encontrada, faca uma analise tecnica detalhada.
-Mantenha os termos tecnicos, referencias normativas e dados quantitativos encontrados.
-Organize em topicos, um por parte do texto analisada.
+            "prompt_lote": lambda pdf, texto: f"""Voce e um especialista tecnico fazendo analise aprofundada do documento '{pdf}'.
+Abaixo estao trechos do documento separados por ---PARTE---.
+
+Para CADA parte do texto:
+1. Faca uma analise tecnica completa e detalhada
+2. Preserve todos os termos tecnicos, referencias normativas, artigos, incisos e paragrafos citados
+3. Destaque dados quantitativos, prazos, percentuais e valores exatos
+4. Explique as implicacoes tecnicas e juridicas de cada dispositivo
+5. Nao omita nenhum detalhe tecnico relevante
+
+Escreva analises extensas. Organize em topicos numerados, um por parte.
 
 TRECHOS:
 {texto}
 
-ANALISE TECNICA DE CADA PARTE:""",
-            "prompt_final": lambda pdf, consolidado: f"""Consolide as analises tecnicas das partes do documento '{pdf}'.
-Mantenha o rigor tecnico, os termos especializados e as referencias encontradas.
-Elimine repeticoes mas preserve todos os dados tecnicos relevantes.
+ANALISE TECNICA DETALHADA DE CADA PARTE:""",
+            "prompt_final": lambda pdf, consolidado: f"""Consolide as analises tecnicas detalhadas das secoes do documento '{pdf}'.
+
+Instrucoes:
+- Mantenha TODOS os termos tecnicos, referencias e dados quantitativos
+- Organize por temas, capitulos ou dispositivos legais
+- Preserve artigos, incisos, paragrafos e referencias normativas
+- O resultado deve ser um documento tecnico completo e extenso
+- Nao simplifique — mantenha o rigor tecnico integral
 
 ANALISES:
 {consolidado}
 
-ANALISE TECNICA FINAL CONSOLIDADA:"""
+ANALISE TECNICA FINAL CONSOLIDADA E COMPLETA:"""
         },
         "⚡ Resumido": {
-            "descricao": "Resume cada parte em 2-3 frases objetivas, destacando apenas o essencial.",
-            "prompt_lote": lambda pdf, texto: f"""Resuma de forma extremamente objetiva cada parte do documento '{pdf}'.
-Para CADA parte do texto encontrada, escreva no maximo 2 a 3 frases destacando apenas o ponto principal.
-Seja direto e elimine qualquer informacao secundaria.
+            "descricao": "Resume cada parte destacando os pontos essenciais com clareza e objetividade.",
+            "prompt_lote": lambda pdf, texto: f"""Voce e um especialista fazendo um resumo executivo do documento '{pdf}'.
+Abaixo estao trechos do documento separados por ---PARTE---.
+
+Para CADA parte do texto:
+1. Identifique e liste TODOS os pontos principais e secundarios relevantes
+2. Preserve prazos, valores, percentuais e obrigacoes especificas
+3. Seja objetivo mas completo — nao omita informacoes importantes
+4. Escreva em bullet points claros e diretos
+
+Organize em topicos numerados, um por parte, com varios bullet points cada.
 
 TRECHOS:
 {texto}
 
-RESUMO OBJETIVO DE CADA PARTE:""",
-            "prompt_final": lambda pdf, consolidado: f"""Consolide os resumos objetivos das partes do documento '{pdf}'.
-Mantenha apenas os pontos mais importantes de cada parte.
-O resultado deve ser um resumo executivo curto e direto.
+PONTOS-CHAVE DE CADA PARTE:""",
+            "prompt_final": lambda pdf, consolidado: f"""Consolide os pontos-chave das secoes do documento '{pdf}'.
 
-RESUMOS:
+Instrucoes:
+- Agrupe os pontos por tema ou categoria logica
+- Mantenha TODOS os dados especificos: prazos, valores, percentuais, obrigacoes
+- O resultado deve ser um resumo executivo completo, nao um resumo de resumo
+- Use bullet points e seja extenso — cubra todos os topicos identificados
+
+PONTOS-CHAVE:
 {consolidado}
 
-RESUMO EXECUTIVO FINAL:"""
+RESUMO EXECUTIVO COMPLETO:"""
         },
         "🧠 Analítico": {
             "descricao": "Analisa criticamente cada parte, identificando argumentos, evidências e conclusões.",
-            "prompt_lote": lambda pdf, texto: f"""Voce e um analista critico examinando o documento '{pdf}'.
-Para CADA parte do texto encontrada, identifique e explique:
-- Qual e o argumento ou ideia central dessa parte
-- Quais evidencias ou dados sao apresentados
-- Qual e a conclusao ou implicacao dessa parte
-Organize em topicos, um por parte analisada.
+            "prompt_lote": lambda pdf, texto: f"""Voce e um analista critico especializado examinando o documento '{pdf}'.
+Abaixo estao trechos do documento separados por ---PARTE---.
+
+Para CADA parte do texto, desenvolva uma analise critica completa identificando:
+1. Argumento ou ideia central — explique em profundidade
+2. Evidencias, dados e fundamentos apresentados
+3. Implicacoes praticas e consequencias juridicas ou operacionais
+4. Pontos fortes, limitacoes ou potenciais problemas
+5. Relacao com outras partes do documento quando pertinente
+
+Escreva analises extensas com pelo menos 4 paragrafos por parte.
 
 TRECHOS:
 {texto}
 
-ANALISE CRITICA DE CADA PARTE:""",
-            "prompt_final": lambda pdf, consolidado: f"""Consolide a analise critica das partes do documento '{pdf}'.
-Identifique os padroes, contradicoes e conclusoes gerais que emergem da analise de cada parte.
-Apresente uma visao critica integrada do documento.
+ANALISE CRITICA DETALHADA DE CADA PARTE:""",
+            "prompt_final": lambda pdf, consolidado: f"""Consolide a analise critica detalhada das secoes do documento '{pdf}'.
+
+Instrucoes:
+- Integre as analises em um documento critico coeso e extenso
+- Identifique padroes, contradicoes e temas recorrentes
+- Apresente conclusoes fundamentadas sobre o documento como um todo
+- Mantenha todas as observacoes criticas relevantes de cada secao
+- O resultado deve ser uma analise critica completa e aprofundada
 
 ANALISES:
 {consolidado}
 
-ANALISE CRITICA FINAL INTEGRADA:"""
+ANALISE CRITICA FINAL INTEGRADA E COMPLETA:"""
         },
         "📋 Comparativo": {
             "descricao": "Compara cada parte com conceitos similares, destacando diferenças e inovações.",
             "prompt_lote": lambda pdf, texto: f"""Voce e um especialista comparando o conteudo do documento '{pdf}' com conhecimentos estabelecidos na area.
-Para CADA parte do texto encontrada, compare com versoes anteriores, conceitos similares ou praticas comuns.
-Destaque o que e novo, diferente ou inovador em cada parte.
-Organize em topicos, um por parte comparada.
+Abaixo estao trechos do documento separados por ---PARTE---.
+
+Para CADA parte do texto:
+1. Compare detalhadamente com versoes anteriores, legislacoes similares ou praticas comuns da area
+2. Destaque o que e novo, diferente, mais restritivo ou mais permissivo
+3. Explique o impacto pratico das diferencas identificadas
+4. Aponte inovacoes, retrocessos ou mudancas significativas
+5. Contextulize no cenario atual da area
+
+Escreva comparacoes extensas com pelo menos 3 paragrafos por parte.
 
 TRECHOS:
 {texto}
 
-COMPARACAO DE CADA PARTE:""",
-            "prompt_final": lambda pdf, consolidado: f"""Consolide as comparacoes das partes do documento '{pdf}'.
-Apresente uma visao geral das diferencas e inovacoes encontradas ao longo de todo o documento.
+COMPARACAO DETALHADA DE CADA PARTE:""",
+            "prompt_final": lambda pdf, consolidado: f"""Consolide as comparacoes detalhadas das secoes do documento '{pdf}'.
+
+Instrucoes:
+- Apresente uma visao comparativa completa e integrada
+- Organize por temas ou areas de comparacao
+- Destaque as principais mudancas e inovacoes do documento
+- Mantenha todos os detalhes comparativos relevantes de cada secao
+- O resultado deve ser um documento comparativo extenso e completo
 
 COMPARACOES:
 {consolidado}
 
-COMPARACAO FINAL CONSOLIDADA:"""
+ANALISE COMPARATIVA FINAL COMPLETA:"""
         },
     }
 
