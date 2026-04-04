@@ -107,8 +107,8 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
     Lê o header 'retry-after' quando disponível para respeitar exatamente
     o tempo sugerido pela API.
     """
-    espera_base = 5.0
-    espera_max  = 90.0
+    espera_base = 20.0
+    espera_max  = 120.0
 
     for tentativa in range(1, max_tentativas + 1):
         try:
@@ -519,8 +519,8 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
                 st.write(f"📄 {len(chunks)} partes encontradas. Aplicando estilo **{estilo_sel}**...")
 
                 # ── CORREÇÃO: lote maior = menos chamadas = menos 429 ──
-                LOTE              = 15   # llama-4-scout suporta 30k TPM
-                PAUSA_ENTRE_LOTES = 5    # segundos entre lotes
+                LOTE              = 10   # menos chunks por lote para caber no TPM
+                PAUSA_ENTRE_LOTES = 15   # pausa maior para respeitar 30k TPM/min
                 resumos_parciais  = []
                 total_lotes       = (len(chunks) + LOTE - 1) // LOTE
                 barra             = st.progress(0, text="Analisando partes...")
@@ -548,39 +548,49 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
                 if len(resumos_parciais) == 1:
                     resumo_final = resumos_parciais[0]
                 else:
-                    with st.spinner("Consolidando análise de todas as partes..."):
-                        GRUPO = 3
-                        grupos = [resumos_parciais[g:g+GRUPO] for g in range(0, len(resumos_parciais), GRUPO)]
-                        intermediarios = []
-                        for gi, grupo in enumerate(grupos):
-                            sub = "\n\n===\n\n".join([f"Secao {i+1}:\n{r}" for i, r in enumerate(grupo)])
-                            prompt_sub = estilo["prompt_final"](pdf_sel, sub)
-                            try:
-                                intermediarios.append(gerar_resposta(prompt_sub))
-                                if gi < len(grupos) - 1:
-                                    time.sleep(PAUSA_ENTRE_LOTES)
-                            except Exception as e:
-                                intermediarios.append(f"[Erro grupo {gi+1}: {e}]")
+                    GRUPO = 3
+                    grupos = [resumos_parciais[g:g+GRUPO] for g in range(0, len(resumos_parciais), GRUPO)]
+                    intermediarios = []
 
-                        if len(intermediarios) == 1:
-                            resumo_final = intermediarios[0]
-                        else:
-                            # Trunca cada intermediário a 400 palavras para não estourar o contexto
-                            MAX_PALAVRAS_PARTE = 800
-                            partes_truncadas = []
-                            for i, r in enumerate(intermediarios):
-                                palavras = r.split()
-                                truncado = " ".join(palavras[:MAX_PALAVRAS_PARTE])
-                                if len(palavras) > MAX_PALAVRAS_PARTE:
-                                    truncado += " [...]"
-                                partes_truncadas.append(f"Parte {i+1}:\n{truncado}")
+                    barra_cons  = st.progress(0, text="Consolidando partes...")
+                    status_cons = st.empty()
 
-                            consolidado_final = "\n\n===\n\n".join(partes_truncadas)
-                            prompt_final = estilo["prompt_final"](pdf_sel, consolidado_final)
-                            try:
-                                resumo_final = gerar_resposta(prompt_final)
-                            except Exception as e:
-                                resumo_final = f"(Erro final: {e})\n\n" + consolidado_final
+                    for gi, grupo in enumerate(grupos):
+                        status_cons.caption(f"⏳ Consolidando grupo {gi+1} de {len(grupos)}...")
+                        sub        = "\n\n===\n\n".join([f"Secao {i+1}:\n{r}" for i, r in enumerate(grupo)])
+                        prompt_sub = estilo["prompt_final"](pdf_sel, sub)
+                        try:
+                            intermediarios.append(gerar_resposta(prompt_sub))
+                            barra_cons.progress((gi + 1) / len(grupos), text=f"Consolidando grupo {gi+1}/{len(grupos)}...")
+                            if gi < len(grupos) - 1:
+                                time.sleep(PAUSA_ENTRE_LOTES)
+                        except Exception as e:
+                            intermediarios.append(f"[Erro grupo {gi+1}: {e}]")
+
+                    barra_cons.progress(1.0, text="Gerando consolidação final...")
+                    status_cons.caption("⏳ Gerando texto final consolidado...")
+
+                    if len(intermediarios) == 1:
+                        resumo_final = intermediarios[0]
+                    else:
+                        MAX_PALAVRAS_PARTE = 800
+                        partes_truncadas = []
+                        for i, r in enumerate(intermediarios):
+                            palavras = r.split()
+                            truncado = " ".join(palavras[:MAX_PALAVRAS_PARTE])
+                            if len(palavras) > MAX_PALAVRAS_PARTE:
+                                truncado += " [...]"
+                            partes_truncadas.append(f"Parte {i+1}:\n{truncado}")
+
+                        consolidado_final = "\n\n===\n\n".join(partes_truncadas)
+                        prompt_final = estilo["prompt_final"](pdf_sel, consolidado_final)
+                        try:
+                            resumo_final = gerar_resposta(prompt_final)
+                        except Exception as e:
+                            resumo_final = f"(Erro final: {e})\n\n" + consolidado_final
+
+                    barra_cons.empty()
+                    status_cons.empty()
 
                 st.session_state["ultimo_resumo"]     = resumo_final
                 st.session_state["ultimo_pdf_resumo"] = pdf_sel
