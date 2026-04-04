@@ -521,7 +521,7 @@ ANALISE COMPARATIVA FINAL COMPLETA:"""
 
                 LOTE              = 3    # kimi-k2: 10k TPM — lotes de 3 chunks
                 PAUSA_ENTRE_LOTES = 10   # pausa moderada com 60 RPM
-                MAX_PARALLEL      = 6    # kimi-k2: 60 RPM — 6 paralelas
+                MAX_PARALLEL      = 4    # kimi-k2: 60 RPM — 4 paralelas
                 total_lotes       = (len(chunks) + LOTE - 1) // LOTE
                 resumos_parciais  = [None] * total_lotes
                 barra             = st.progress(0, text="Analisando partes...")
