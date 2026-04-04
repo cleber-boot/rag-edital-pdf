@@ -35,7 +35,7 @@ CHROMA_BASE_DIR = "./chroma_bancos"
 MODELO_GROQ     = "qwen/qwen3-32b"
 
 _ERROS_429 = ("429", "rate_limit_exceeded", "rate limit", "too many requests")
-_ERROS_413 = ("413", "request too large", "request_too_large")
+_ERROS_413 = ("413", "request too large", "request_too_large", "context_length_exceeded", "context length", "maximum context")
 
 
 # ── inicialização ─────────────────────────────────────────────
@@ -119,12 +119,13 @@ def gerar_resposta(prompt: str, max_tentativas: int = 6) -> str:
                     {"role": "user",   "content": prompt},
                 ],
                 temperature=0.2,
-                max_tokens=8192,
+                max_tokens=4096,
             )
             return resposta.choices[0].message.content
 
         except Exception as e:
             erro_str = str(e).lower()
+            logger.warning("[gerar_resposta] Erro raw: %s", str(e))
             eh_413   = any(t in erro_str for t in _ERROS_413)
             eh_429   = any(t in erro_str for t in _ERROS_429)
 
